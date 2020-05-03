@@ -1,0 +1,479 @@
+---
+title: |
+  | Análisis de datos de Microarrays
+  | PEC1 - Análisis de Datos ómicos
+author: "Emilio Alarcón Martín"
+date: '`r format(Sys.Date(),"%e de %B, %Y")`'
+output:
+  pdf_document:
+    keep_tex: yes
+    toc: yes
+    toc_depth: 4
+  html_document:
+    df_print: paged
+    toc_float: true
+    toc: yes
+    toc_depth: 4
+    theme: united
+    highlight: tango
+lang: es  # es: español
+---
+
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, 
+                      comment = NA, prompt = TRUE, tidy = FALSE, 
+                      fig.width = 11, fig.height = 7, fig_caption = TRUE,
+                      cache=FALSE)
+Sys.setlocale("LC_TIME", "C")
+```
+
+
+# Introducción
+
+## Objetivo
+
+El objetivo de este trabajo es realizar un análisis de datos de microarrays del set de datos seleccionado, GDS2300. Consta de 6 muestras de ovocitos de ratón. Compararemos la expresión génica de 3 ovocitos en estadio de metafase II con 3 ovocitos en estadio de vesícula germinal.
+
+## Abstract
+
+En este artículo se buscó identificar y caracterizar las transcripciones que están degradadas frente a las que están estables durante la transición de la vesícula germinal (VG) transcriptivamente silenciosa a la metafase II (MII) mediante un enfoque de microarrays. Se utilizó un sistema de amplificación de la transcripción de los ovocitos utilizando cebado interno y de 3'-poly(A) para minimizar el impacto de las variaciones complejas en la poliadenilación de la transcripción que prevalecen durante esta transición. Las transcripciones fueron identificadas y cuantificadas usando el genoma del ratón Affymetrix 430 v2.0 GeneChip. 
+
+[*Su, Y. Q., Sugiura, K., Woo, Y., Wigglesworth, K., Kamdar, S., Affourtit, J., & Eppig, J. J. (2007). Selective degradation of transcripts during meiotic maturation of mouse oocytes. Developmental biology, 302(1), 104-117.*](https://www.ncbi.nlm.nih.gov/pubmed/17022963)
+
+## Puesta a punto de Rstudio
+
+Se plantea aquí la instalación de los paquetes y su activación en Rstudio para su uso en esta actividad. Podrían no coincidir las versiones de los paquetes con las realizadas posteriormente. 
+
+```{r installPackages, message=FALSE, warning=FALSE}
+
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install()
+
+
+libraries <- c("affy",
+               "annaffy",
+               "annotate",
+               "affyPLM",
+               "affyQCReport",
+               "genefilter",
+               "limma",
+               "org.Mm.eg.db",
+               "mouse4302.db",
+               "DOSE",
+               "clusterProfiler",
+               "pathview",
+               "Category",
+               "GO.db",
+               "GOstats",
+               "gplots")
+
+
+check.libraries <- is.element(libraries, installed.packages()[, 1])==FALSE
+libraries.to.install <- libraries[check.libraries]
+if (length(libraries.to.install!=0)) {
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install(libraries.to.install)
+}
+
+for (i in libraries) {
+  library(i, character.only = TRUE)
+}
+
+
+
+```
+
+# Obtención y lectura de los datos
+
+Al igual que en el ejercicio planteado, en primer lugar se asigna un directorio de trabajo a la variable **workingDir**.
+Dentro de éste, se creará un subdirectorio denominado **"data"** para almacenar los datos y un directorio **"results"** para los resultados.
+
+Los datos pueden verse en este enlace [este link](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE5668) y descargarse directamente desde [este link](https://ftp.ncbi.nlm.nih.gov/geo/series/GSE5nnn/GSE5668/soft/) y [este link](https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE5668&format=file). Será necesario descomprimir los archivos e introducirlos en el subdirectorio **"data"**. 
+
+El código, junto con los resultados obtenidos, [pueden descargarse desde este link a github](https://github.com/Alarcon-Martin-E/PEC1_Analisis_Omicos).
+
+
+```{r CreateFolders, warning=FALSE}
+
+setwd("C:/Users/Emilio/Desktop/PEC 1 Ómicas abril 2020")
+workingdir <- getwd()
+dataDir <- file.path(workingdir, "data")
+resultsDir <- file.path(workingdir,"results")
+celfilesDir <- file.path(workingdir,"celfiles")
+
+```
+
+## Lectura de los datos
+
+Las muestras “GSM132592.CEL.gz” “GSM132657.CEL.gz” “GSM132658.CEL.gz” “GSM132659.CEL.gz”
+“GSM132660.CEL.gz” “GSM132661.CEL.gz” se corresponden respectivamente a “Vesícula germinal
+1”, “Vesícula germinal 2”, “Vesícula germinal 3”, “Metafase II 1”, “Metafase II 2”,
+“Metafase II 3”.
+Se asignan también los colores para estos dos grupos que serán empleados en el preprocesado de los datos. 
+
+```{r}
+
+setwd(dataDir)
+affy.data <- ReadAffy()
+show(affy.data)
+colnames(affy.data)
+info <- readLines(file.path(dataDir,"GDS2300_full.soft"), n=70)
+exprs <- read.csv(file.path(dataDir, "GDS2300_full.soft"), skip=68,
+                header=TRUE,sep="\t",row.names = 1)
+                  
+colnames(exprs)
+dim(exprs)  
+colores <- c(rep("#FF0000",3), c(rep("#0000FF",3)))
+```
+
+
+# Preprocesado: Exploración, Control de Calidad y Normalización
+
+## Exploración de los datos 
+
+### Gráfico de densidad de los arrays
+
+Permite hacerse una idea de si las distribuciones de los distintos arrays son similares en forma y posición. Existe una ligera diferencia entre “GermVes” y “MII”, pero podemos concluir que la distribución de los arrays es similar.
+
+```{r}
+
+affy.data$sample <- c("GermVes1","GermVes2","GermVes3",
+                    "MetaphaseII1","MetaphaseII2", "MetaphaseII3")
+info <- data.frame(grupo = c(4,4,4,5,5,5))
+sampleNames <- pData(affy.data)$sample
+hist(affy.data, main = "Signal distribution", col = colores,
+     lty = 1:ncol(info), xlim = c(4.5,12), lwd = 1.5)
+legend (x = "topright", legend = sampleNames,
+        col = colores, lty = 1:ncol(info))
+
+```
+
+### Diagrama de cajas
+
+Muestra información similar al gráfico de densidad, facilitando la comparación entre distribuciones.
+
+```{r}
+
+boxplot(affy.data, cex.axis=0.6, col = colores, las = 2,
+        names = sampleNames)
+
+```
+
+### Análisis de componentes principales (PCA)
+
+Empleando el análisis de componentes principales detectamos si las muestras se agrupan
+por grupos de manera coherente (MII frente a GermVes). 
+El PC1 separa bastante bien los grupos, lo cual es importante porque agrupa un porcentaje muy elevado de la varianza (73%). El PC2 presenta agrupa un porcentaje menor de la varianza, y principalmente separa réplicas (13.3%). Germvers3 se aleja ligeramente del resto, pero no creo que sea una diferencia especialmente elevada. Podemos considerar el enfoque de PC como bueno, ya que en total, recoje el 86.3% de la varianza de las muestras.
+
+```{r}
+
+logaffy <- log2(exprs(affy.data))
+plotPCA <- function(X, labels = affy.data$sample, colors = colores, 
+                      dataDesc = "", scale = FALSE)
+{
+pcX <- prcomp(t(X), scale = scale)
+loads <- round(pcX$sdev^2/sum(pcX$sdev^2)*100, 1)
+xlab <- c(paste("PC1",loads[1],"%"))
+ylab <- c(paste("PC2",loads[2],"%"))
+if (is.null(colors)) colors=1
+plot(pcX$x[,1:2], xlab = xlab, ylab = ylab, col = colors, pch = 19,
+xlim = c(min(pcX$x[,1])-10, max(pcX$x[,1])+10),
+ylim = c(min(pcX$x[,2])-10, max(pcX$x[,2])+10),
+)
+text(pcX$x[,1], pcX$x[,2], labels, pos=3, cex=0.8)
+title(paste("Plot of first 2 PCs for expressions in", dataDesc, sep=" "), cex = 0.8)
+}
+plotPCA(logaffy)
+
+```
+
+## Control de calidad específico para microarrays
+
+### Dendrograma
+
+Dendrograma resultante de un agrupamiento jerárquico. De nuevo, GermVesc3 no se agrupa con las sus muestras de GermVesc, lo que puede significar que hay cierta variación que puede deberse a procedimiento experimental, Esta heterogeneidad de la mueestra no debería suponer un problema mayor después de la normalización y filtraje de los datos.
+
+```{r}
+
+clust.euclid.average <- hclust(dist(t(exprs(affy.data))), method = "average")
+plot(clust.euclid.average, labels = sampleNames, main = "Hierarchical
+clustering of samples", hang = -1)
+
+```
+
+### Gráfico de degradación
+
+```{r}
+
+deg <- AffyRNAdeg(affy.data)
+cols <- sample(colors(), nrow(pData(affy.data)))
+plotAffyRNAdeg(deg, col=colores)
+legend(legend = sampleNames(affy.data), x = "topleft", lty = 1, col = colores)
+```
+
+### Gráfico de expresiones relativas (RLE)
+
+Gráfico de expresiones relativas (RLE) resultante del análisis basado
+en modelos (PLM). Las muestras son simétricas y similares lo que sugiera una
+calidad aceptable de los datos
+
+```{r}
+
+computePLM <- T
+if(computePLM){
+Pset <- fitPLM(affy.data)
+save(Pset, file = file.path(workingdir,"PLM.Rda"))
+}else{
+load (file = file.path(workingdir,"PLM.Rda"))
+}
+RLE(Pset, main = "Relative Log Expression", names = sampleNames,
+las = 2, col = colores, cex.axis = 0.6, ylim = c(-5,5))
+
+```
+
+# Normalización 
+
+Mediante la normalización por RMA (robust multi-array average) se corregirá el background de los arrays y se transformarán los datos utilizando el logaritmo en base 2 de cada intensidad ajustada. El método de normalización por RMA se basa en los distintos valores de las sondas para un mismo gen en cada uno de los chips de microarrays. Las sondas de menor intensidad tienen variaciones de intensidad que se aproximan a 0, por lo que al usar RMA no se debería necesitar realizar un filtraje no-específico. El filtraje no específico podría introducir sesgos en nuestros datos al afectar el comportamiento en los análisis posteriores, sin embargo, posteriormente realizaremos un filtraje no específico y compararemos el output del procesado de los dos conjuntos de datos.
+
+En el boxplot de los valores normalizados se observa que los valores en una situación que permite su comparación
+
+```{r}
+
+ovo <- rma(affy.data)
+ovo.rma <- exprs(ovo)
+boxplot(ovo.rma,main="Boxplot for RMA-normalized expression values",
+names = sampleNames, cex.axis = 0.7, col = colores,las = 2)
+colnames(ovo.rma) <- c("GermVes1","GermVes2","GermVes3","MII1","MII2","MII3")
+dim(ovo.rma)
+
+```
+
+
+
+# Selección de genes con expresión diferencial
+
+## Matriz de diseño y matriz de contraste
+
+La matriz de diseño aporta asignación de cada muestra a un grupo (cada fila contiene un uno en la columna del grupo y cero en el resto)
+
+La matriz de contrastes describe las comparaciones entre grupos. En este caso la matriz de comparación es muy simple, pero de forma habitual consta de tantas columnas como comparaciones y filas como grupos. 
+
+```{r}
+
+design <- matrix(c(1,1,1,0,0,0,0,0,0,1,1,1), nrow=6)
+colnames(design) <- c("GermVes", "Metaphase")
+rownames(design) <- c("GermVes1", "GermVes2", "GermVes3", "MII1", "MII2",   "MII3")
+design
+cont.matrix <- makeContrasts (MetaphaseII = (Metaphase-GermVes), levels=design)
+cont.matrix
+
+```
+
+## Estimación del modelo y selección de genes
+
+Generamos el modelo lineal a partir de los datos normalizados y las matrices. En *limma* amplía el análisis empleando modelos de Bayes empíricos, combinando información la matriz de datos y de cada gen individual, lo que obtiene estimaciones de error mejoradas. Para controlar el porcentaje de falsos positivos, los p-valores se ajustan utilizando el metodo de Benjamini y Hochberg.
+
+Como método de visualización, con el volcanoplot podemos apreciar los genes más interesantes (log2 Fold Change neto elevado para la significación biológica y −log10(P−value) elevado para la estadística)
+
+En el gráfico, podemos la asimetría hacia la izquierda, lo que indica un menor número genes transcripcionalmente activos en metafase II comparados con el estadio de vesícula germinal. Esto es coherente ya que en Metafase II, la heterocromatina está compactada formando la placa metafásica ecuatorial, siendo esta apenas accesible a la maquinaria de transcripción.
+
+```{r}
+
+fit <- lmFit(ovo.rma, design)
+fit.main <- contrasts.fit(fit, cont.matrix)
+fit.main <- eBayes(fit.main)
+topTabMII <- topTable (fit.main, number = nrow(fit.main), coef = "MetaphaseII", adjust="fdr")
+coefnum=1
+volcanoplot(fit.main, coef = 1, highlight = 10, names = exprs$Gene.symbol ,
+            style= "p-value", main = "Differentially expressed genes")
+abline(v = c(-2,2))
+
+```
+
+
+## Principales genes expresados diferencialmente
+
+Para ver con más detalle los genes más relevantes, podría analizarse la tabla **topTabMII2 ** que se crea a continuación.
+
+```{r}
+
+topTabMII2 <- topTable (fit.main, number=nrow(fit.main), adjust="fdr", genelist = exprs)
+colnames(topTabMII2)
+str(topTabMII2)
+topTabMII2[1:10,c(28:33)]
+
+```
+
+# Post-procesado de las listas de genes obtenidas
+
+Pueden ejecutarse diferentes tipos de análisis,  encaminados a facilitar la interpretación.
+En este grupo se encuentran, entre otras:
+
+* La anotación de las listas de genes en diversas bases de datos.
+* La comparación entre las listas para determinar qué genes cambian simultaneamente en varias comparaciones.
+* La visualización de todos los genes seleccionados en varias comparaciones para detectar grupos de genes con patrones de cambio similares.
+* El análisis de significación biológica de las listas mediante análisis de enriquecimiento para detectar si las listas se encuentran enriquecidas en genes asociados a funciones o procesos biológicos determinados.
+
+## Anotación de resultados
+
+La identificación de los genes seleccionados puede resultar más sencilla para
+el especialista en un campo si se utilizan nombres estándar como "gene symbol". Cada paquete de anotaciones tiene tablas de correspondencia entre los distintos tipos de identificadores, principalmente entre los del array y los de otras bases de datos.
+Para saber qué anotaciones están disponibles debe cargarse el paquete y llamar la función del mismo nombre.
+
+```{r}
+
+geneList <- topTabMII2[,28]
+names(geneList) <- as.character(topTabMII2[,10])
+gene <- names(geneList)[abs(geneList) > 2]
+geneList <- sort(geneList, decreasing = TRUE)
+gene.df <- bitr(gene, fromType = "ENTREZID", toType = c("ENSEMBL", "SYMBOL"), OrgDb = org.Mm.eg.db)
+head(gene.df)
+
+```
+
+## Visualización de la expresión diferencial. Heatmaps
+
+Podemos observar que existen más genes regulados negativamente que positivamente en metafase II comparados con el estadio de vesicula germinal. Existen un total de 8162 genes que se ven expresados de forma diferencial.
+
+```{r}
+
+res <- decideTests(fit.main, method = "separate", adjust.method = "fdr", p.value = 0.01)
+sum.res.rows <- apply(abs(res),1,sum)
+res.selected <- res[sum.res.rows != 0,]
+print(summary(res))
+
+```
+
+A continuación, se muestran los resultados usando dos funciones *Heapmaps* distintas:
+
+```{r}
+
+probeNames <- rownames(res)
+probeNames.selected <- probeNames[sum.res.rows != 0]
+exprs2cluster <- (ovo.rma)[probeNames.selected,]
+heatmap(exprs2cluster, col = rainbow(100), cexCol = 0.9)
+
+```
+
+```{r}
+
+heatmap.2(exprs2cluster,
+          col = bluered, scale = "row", key = TRUE, symkey = FALSE,
+          density.info = "none", trace = "none", cexCol = 1, sepwidth = c(0.05, 0.05))
+
+```
+
+## Análisis de la significación biológica
+
+### GO Set Enrichment utilizando la ontología: Biological Process.
+
+```{r}
+
+ego <- enrichGO(gene, OrgDb = "org.Mm.eg.db", ont="BP", readable=TRUE)
+barplot(ego, showCategory=25)
+dotplot(ego, showCategory=30)
+go <- enrichGO(gene, OrgDb = "org.Mm.eg.db", ont="all")
+dotplot(go, split="ONTOLOGY") + facet_grid(ONTOLOGY~., scale="free")
+
+```
+
+### Visualización de clústers mediante cnetplot
+
+```{r}
+ego2 <- simplify(ego)
+cnetplot(ego2, foldChange=geneList)
+```
+
+### KEGG set enrichment using clusterProfiler
+
+```{r}
+kk <- enrichKEGG(gene = gene, organism = "mmu", pvalueCutoff = 0.05)
+head(kk)
+kk2 <- gseKEGG(geneList = geneList,organism = "mmu", nPerm = 1000, 
+               minGSSize = 120, pvalueCutoff = 0.05) 
+head(kk2)
+dotplot(kk, showCategory=20)
+
+wnt <- pathview(gene.data = geneList,
+                pathway.id = "mmu04310",
+                species = "mmu",
+                limit = list(gene=max(abs(geneList)), cpd=1))
+
+ampk <- pathview(gene.data = geneList,
+                 pathway.id = "mmu04152",
+                 species = "mmu",
+                 limit = list(gene=max(abs(geneList)), cpd=1))
+
+pi3pakt <- pathview(gene.data = geneList,
+                    pathway.id = "mmu04151",
+                    species = "mmu",
+                    limit = list(gene=max(abs(geneList)), cpd=1))
+
+mapkinasa <- pathview(gene.data = geneList,
+                      pathway.id = "mmu04010",
+                      species = "mmu",
+                      limit = list(gene=max(abs(geneList)), cpd=1))
+
+oxpho <- pathview(gene.data = geneList,
+                  pathway.id = "mmu00190",
+                  species = "mmu",
+                  limit = list(gene=max(abs(geneList)), cpd=1))
+
+ribo <- pathview(gene.data = geneList,
+                 pathway.id = "mmu03010",
+                 species = "mmu",
+                 limit = list(gene=max(abs(geneList)), cpd=1))
+```
+
+### Segundo enfoque de GO/KEGG
+
+Realizaremos un segundo GO /KEGG set enrichment y compararemos los resultados. Seleccionaremos genes y pathways que hayan sido detectado en ambos análisis.
+
+El objeto “dat.s” contiene solo los genes diferencialmente expresados. A partir de ahí se trabajará con el objeto “myids”, que consta de todos los probes que hemos considerado interesantes para el estudio.
+El test que llevaremos a cabo ahora consiste en 3 pasos, ya que la jerarquía de Gene
+Ontology (GO) consiste en tres diferentes ontologías: procesos biológicos (BP), función molecular (MF) y componente celular (CC).Estos comandos utilizan el pvalor de 0.05 para realizar el análisis de los datos.
+
+```{r}
+rn <- rownames(topTable(fit.main, n=100))
+tt <- topTable(fit.main, n=nrow(ovo.rma))
+rn <- rownames(tt)[tt$P.Value<=0.001]
+dat.s <- ovo.rma[rn,]
+head(dat.s)
+aallg <- get("mouse4302ENTREZID")
+allg <- as.data.frame(unlist(as.list(aallg)))
+myids <- unique(allg[rownames(dat.s),])
+```
+
+```{r}
+paramsBP <- new("GOHyperGParams", geneIds = myids,
+                annotation = c("mouse4302.db"), ontology = "BP", pvalueCutoff = 0.05,
+                conditional = FALSE, testDirection = "over")
+resultBP <- hyperGTest(paramsBP)
+paramsMF <- new("GOHyperGParams", geneIds = myids,
+                annotation = c("mouse4302.db"), ontology = "MF", pvalueCutoff = 0.05,
+                conditional = FALSE, testDirection = "over")
+resultMF <- hyperGTest(paramsMF)
+paramsCC <- new("GOHyperGParams", geneIds=myids,
+                annotation = c("mouse4302.db"), ontology = "CC", pvalueCutoff = 0.05,
+                conditional = FALSE, testDirection = "over")
+resultCC <- hyperGTest(paramsCC)
+```
+
+Se guardarán los resultados en una tabla Html para poder visualizar las funciones
+metabólicas/celulares y significado biológico.
+
+```{r}
+
+htmlReport(resultBP, "hypergeo.html", append=T)
+htmlReport(resultMF, "hypergeo.html", append=T)
+htmlReport(resultCC, "hypergeo.html", append=T)
+
+```
+
+
+
